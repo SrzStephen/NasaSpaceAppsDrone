@@ -4,19 +4,10 @@ import logging
 logger = logging.getLogger(__name__)
 from .controls import Actuators
 from json import dumps, JSONDecodeError
+
 ActuatorClass = Actuators()
+import click
 
-def deserialise(dat: str):
-    try:
-        data = dumps(dat)
-    except  JSONDecodeError:
-        return None
-    required_fields = ["roll", "pitch", "yaw", "throttle"]
-    if any(required_fields) not in data:
-        return None
-    ## for now just return the data dict. I'll deal with any conversions later
-
-    return data
 
 class EchoServerProtocol:
     def connection_made(self, transport):
@@ -29,10 +20,20 @@ class EchoServerProtocol:
     async def handle_income_packet(self, data, addr):
         # echo back the message, but 2 seconds later
         logger.debug(f"got {data} from {addr}")
-        ActuatorClass.set_values(data)
+        try:
+            data_dict = dumps(data)
+        except JSONDecodeError:
+            logger.warn(f"Invalid JSON data sent")
+            return None
+
+        if any(["roll", "pitch", "yaw", "throttle"]) not in data_dict:
+            logger.warn(f"fields missing from {data_dict}")
+            return None
+
+        ActuatorClass.set_values(data_dict)
 
 
-async def run_utcserver():
+async def run_utcserver(port, timeout):
     logger.info("Starting server")
 
     # Get a reference to the event loop as we plan to use
@@ -43,13 +44,19 @@ async def run_utcserver():
     # client requests.
     transport, protocol = await loop.create_datagram_endpoint(
         lambda: EchoServerProtocol(),
-        local_addr=('127.0.0.1', 9999))
+        local_addr=('127.0.0.1', port))
 
     try:
-        await asyncio.sleep(3600)  # Serve for 1 hour.
+        await asyncio.sleep(timeout * 60)  # function expects seconds.
     finally:
         transport.close()
 
 
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.DEBUG)
+@click.command()
+@click.option("-v", "--verbose", default=0, count=True, description="Verbosity to run script at", type=int)
+@click.option("-p", "--port", default=9999, description="Port to receive data on", type=int)
+@click.option("-t", "--timeout", default=120, description="Time to read port before auto closing (min)", type=int)
+def run(verbose, port, timeout):
+    # set up logging
+    logger.basicConfig(level=logging.getLevelName(verbose * 10 + 10))
+    asyncio.run(main(port, timeout))
